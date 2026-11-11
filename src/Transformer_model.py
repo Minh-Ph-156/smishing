@@ -123,7 +123,11 @@ def train_eval_transformers(train_df, test_df, text_col=None, label_col=None, ep
                 tokenizer = AutoTokenizer.from_pretrained(model_checkpoint, use_fast=use_fast)
             except Exception:
                 tokenizer = AutoTokenizer.from_pretrained(model_checkpoint)
-            model = AutoModelForSequenceClassification.from_pretrained(model_checkpoint, num_labels=num_labels).to(device)
+            model = AutoModelForSequenceClassification.from_pretrained(
+                model_checkpoint,
+                num_labels=num_labels,
+                torch_dtype=torch.float32
+            ).to(device)
 
             special_tokens_dict = {'additional_special_tokens': ADDITIONAL_SPECIAL_TOKENS}
             num_added = tokenizer.add_special_tokens(special_tokens_dict)
@@ -132,6 +136,8 @@ def train_eval_transformers(train_df, test_df, text_col=None, label_col=None, ep
                     model.resize_token_embeddings(len(tokenizer), mean_resizing=False)
                 except TypeError:
                     model.resize_token_embeddings(len(tokenizer))
+            # Đồng bộ toàn bộ weights (gồm cả token embeddings và classification head mới tạo) về torch.float32
+            model = model.to(device, dtype=torch.float32)
         except Exception as e:
             print(f"[!] Không thể tải model {model_checkpoint}: {e}", flush=True)
             continue
@@ -158,7 +164,7 @@ def train_eval_transformers(train_df, test_df, text_col=None, label_col=None, ep
             for batch in train_loader:
                 optimizer.zero_grad()
                 outputs = model(input_ids=batch['input_ids'].to(device), attention_mask=batch['attention_mask'].to(device))
-                loss = criterion(outputs.logits, batch['labels'].to(device))
+                loss = criterion(outputs.logits.float(), batch['labels'].to(device))
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
@@ -173,7 +179,7 @@ def train_eval_transformers(train_df, test_df, text_col=None, label_col=None, ep
         with torch.no_grad():
             for batch in test_loader:
                 outputs = model(input_ids=batch['input_ids'].to(device), attention_mask=batch['attention_mask'].to(device))
-                probs = torch.softmax(outputs.logits, dim=1).cpu().numpy()
+                probs = torch.softmax(outputs.logits.float(), dim=1).cpu().numpy()
                 preds.extend(np.argmax(probs, axis=1))
                 targets.extend(batch['labels'].numpy())
                 all_probs.append(probs)
